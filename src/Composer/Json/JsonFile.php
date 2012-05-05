@@ -16,6 +16,7 @@ use Composer\Repository\RepositoryManager;
 use Composer\Composer;
 use JsonSchema\Validator;
 use Seld\JsonLint\JsonParser;
+use Seld\JsonLint\ParsingException;
 use Composer\Util\StreamContextFactory;
 use Composer\Util\RemoteFilesystem;
 use Composer\Downloader\TransportException;
@@ -88,7 +89,13 @@ class JsonFile
             throw new \RuntimeException('Could not read '.$this->path."\n\n".$e->getMessage());
         }
 
-        return static::parseJson($json);
+        try {
+            $data = static::parseJson($json);
+        } catch (ParsingException $e) {
+            $this->handleValidationException($e);
+        }
+
+        return $data;
     }
 
     /**
@@ -128,7 +135,11 @@ class JsonFile
         $data = json_decode($content);
 
         if (null === $data && 'null' !== $content) {
-            self::validateSyntax($content);
+            try {
+                self::validateSyntax($content);
+            } catch (ParsingException $e) {
+                $this->handleValidationException($e);
+            }
         }
 
         $schemaFile = __DIR__ . '/../../../res/composer-schema.json';
@@ -150,10 +161,29 @@ class JsonFile
             foreach ((array) $validator->getErrors() as $error) {
                 $errors[] = ($error['property'] ? $error['property'].' : ' : '').$error['message'];
             }
-            throw new JsonValidationException($errors);
+            $this->handleValidationException(new JsonValidationException($errors));
         }
 
         return true;
+    }
+
+    /**
+     * Handle validation exceptions
+     *
+     * Adds file path to validation exceptions
+     *
+     * @param \Exception $e Validation exception
+     * @throws JsonValidationException
+     */
+    public function handleValidationException(\Exception $e)
+    {
+        if (preg_match('{^https?://}i', $this->path)) {
+            $path = $this->path;
+        } else {
+            $path = realpath($this->path);
+        }
+        
+        throw new JsonValidationException(array($e->getMessage(), "in ".$path));
     }
 
     /**
